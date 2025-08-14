@@ -1,6 +1,9 @@
 import streamlit as st
 import requests
 import pandas as pd
+import plotly.express as px
+from datetime import datetime, date
+import numpy as np
 
 # List of cities with coordinates
 cities = [
@@ -50,6 +53,43 @@ cities = [
 # Streamlit app
 st.title("🌦️ Weather in Norwegian Cities")
 
+# Function to get weather data for a city
+def get_weather_data(lat, lon):
+    url = f"https://api.met.no/weatherapi/locationforecast/2.0/compact?lat={lat}&lon={lon}"
+    headers = {"User-Agent": "MyWeatherApp/1.0"}
+    response = requests.get(url, headers=headers)
+    if response.status_code == 200:
+        return response.json()
+    return None
+
+# Function to extract today's temperature timeline
+def get_today_temperature_timeline(weather_data):
+    today = date.today().isoformat()
+    temps = []
+    times = []
+    
+    for entry in weather_data["properties"]["timeseries"]:
+        entry_date = entry["time"].split("T")[0]
+        if entry_date == today:
+            times.append(datetime.fromisoformat(entry["time"].replace("Z", "+00:00")))
+            temps.append(entry["data"]["instant"]["details"]["air_temperature"])
+    
+    return pd.DataFrame({"Time": times, "Temperature": temps})
+
+# Function to calculate daily precipitation for a city
+def get_daily_precipitation(weather_data):
+    today = date.today().isoformat()
+    precipitation_amounts = []
+    
+    for entry in weather_data["properties"]["timeseries"]:
+        entry_date = entry["time"].split("T")[0]
+        if entry_date == today and "next_1_hours" in entry["data"]:
+            if "details" in entry["data"]["next_1_hours"]:
+                precip = entry["data"]["next_1_hours"]["details"].get("precipitation_amount", 0)
+                precipitation_amounts.append(precip)
+    
+    return sum(precipitation_amounts) if precipitation_amounts else 0
+
 city_names = [city["name"] for city in cities]
 selected_city_name = st.selectbox("Choose a city", city_names)
 
@@ -57,21 +97,74 @@ if selected_city_name:
     city_info = next(c for c in cities if c["name"] == selected_city_name)
     lat, lon = city_info["lat"], city_info["lon"]
     
-    url = f"https://api.met.no/weatherapi/locationforecast/2.0/compact?lat={lat}&lon={lon}"
-    headers = {"User-Agent": "MyWeatherApp/1.0"}
-    response = requests.get(url, headers=headers)
+    weather_data = get_weather_data(lat, lon)
 
-    if response.status_code == 200:
-        data = response.json()
-        now = data["properties"]["timeseries"][0]
+    if weather_data:
+        now = weather_data["properties"]["timeseries"][0]
         time = now["time"]
         details = now["data"]["instant"]["details"]
 
-        st.subheader(f"Weather in {selected_city_name} at {time}")
-        st.metric("🌡️ Temperature (°C)", details["air_temperature"])
-        st.metric("💨 Wind Speed (m/s)", details.get("wind_speed", "N/A"))
-        st.metric("💧 Humidity (%)", details.get("relative_humidity", "N/A"))
-        st.metric("☁️ Cloud Cover (%)", details.get("cloud_area_fraction", "N/A"))
-        st.metric("🧭 Wind Direction (°)", details.get("wind_from_direction", "N/A"))
+        # Current weather section
+        st.subheader(f"🌤️ Current Weather in {selected_city_name}")
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric("🌡️ Temperature (°C)", details["air_temperature"])
+            st.metric("💨 Wind Speed (m/s)", details.get("wind_speed", "N/A"))
+        
+        with col2:
+            st.metric("💧 Humidity (%)", details.get("relative_humidity", "N/A"))
+            st.metric("☁️ Cloud Cover (%)", details.get("cloud_area_fraction", "N/A"))
+        
+        with col3:
+            st.metric("🧭 Wind Direction (°)", details.get("wind_from_direction", "N/A"))
+        
+        st.caption(f"Last updated: {time}")
+        
+        # Temperature timeline chart
+        st.subheader(f"📈 Today's Temperature Timeline - {selected_city_name}")
+        temp_df = get_today_temperature_timeline(weather_data)
+        
+        if not temp_df.empty:
+            fig = px.line(temp_df, x="Time", y="Temperature", 
+                         title=f"Temperature Throughout the Day - {selected_city_name}",
+                         labels={"Temperature": "Temperature (°C)", "Time": "Time"})
+            fig.update_layout(height=400)
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("No temperature timeline data available for today.")
+            
     else:
         st.error("Could not fetch weather data. Try again later.")
+
+# Top 3 cities with highest precipitation
+st.subheader("🌧️ Top 3 Cities with Highest Expected Precipitation Today")
+
+with st.spinner("Calculating precipitation data for all cities..."):
+    precipitation_data = []
+    
+    for city in cities:
+        weather_data = get_weather_data(city["lat"], city["lon"])
+        if weather_data:
+            daily_precip = get_daily_precipitation(weather_data)
+            precipitation_data.append({
+                "City": city["name"],
+                "Expected Precipitation (mm)": round(daily_precip, 2)
+            })
+    
+    if precipitation_data:
+        precip_df = pd.DataFrame(precipitation_data)
+        precip_df = precip_df.sort_values("Expected Precipitation (mm)", ascending=False)
+        top_3 = precip_df.head(3)
+        
+        if top_3["Expected Precipitation (mm)"].sum() > 0:
+            for i, (_, row) in enumerate(top_3.iterrows(), 1):
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    st.write(f"**{i}. {row['City']}**")
+                with col2:
+                    st.metric("", f"{row['Expected Precipitation (mm)']} mm")
+        else:
+            st.info("No significant precipitation expected in any Norwegian cities today! ☀️")
+    else:
+        st.error("Could not fetch precipitation data for cities.")
