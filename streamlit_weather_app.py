@@ -90,6 +90,20 @@ def get_daily_precipitation(weather_data):
     
     return sum(precipitation_amounts) if precipitation_amounts else 0
 
+# Calculate precipitation data once for all cities (cached)
+@st.cache_data
+def get_all_cities_precipitation():
+    precipitation_data = []
+    for city in cities:
+        weather_data = get_weather_data(city["lat"], city["lon"])
+        if weather_data:
+            daily_precip = get_daily_precipitation(weather_data)
+            precipitation_data.append({
+                "City": city["name"],
+                "Expected Precipitation (mm)": round(daily_precip, 2)
+            })
+    return precipitation_data
+
 city_names = [city["name"] for city in cities]
 selected_city_name = st.selectbox("Choose a city", city_names)
 
@@ -140,17 +154,8 @@ if selected_city_name:
 # Top 3 cities with highest precipitation
 st.subheader("🌧️ Top 3 Cities with Highest Expected Precipitation Today")
 
-with st.spinner("Calculating precipitation data for all cities..."):
-    precipitation_data = []
-    
-    for city in cities:
-        weather_data = get_weather_data(city["lat"], city["lon"])
-        if weather_data:
-            daily_precip = get_daily_precipitation(weather_data)
-            precipitation_data.append({
-                "City": city["name"],
-                "Expected Precipitation (mm)": round(daily_precip, 2)
-            })
+with st.spinner("Loading precipitation data for all cities..."):
+    precipitation_data = get_all_cities_precipitation()
     
     if precipitation_data:
         precip_df = pd.DataFrame(precipitation_data)
